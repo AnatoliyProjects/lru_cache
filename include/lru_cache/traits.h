@@ -65,6 +65,12 @@ namespace lru {
         // Cached item.
         using Item = std::pair<const Key, Value>;
 
+        // Functor returns the size of a key dynamic buffer (if present).
+        using KeyMem = std::function<size_t(const Key &)>;
+
+        // Functor returns the size of a value dynamic buffer (if present).
+        using ValueMem = std::function<size_t(const Value &)>;
+
         // Cache buffer for storing items (client has no forward access).
         using Buf = std::list<Item, Allocator>;
 
@@ -96,6 +102,8 @@ namespace lru {
         // The actual memory usage for non-POD/complex types may differ significantly.
         // For example, if the desired type contains a pointer to a dynamic buffer,
         // we will consider only the pointer size, not a buffer.
+        // To handle such cases, you may provide the appropriate hint function
+        // to the Cache/SafeCache ctor (see ctor comments for details).
         static constexpr size_t kItemMem = sizeof(typename Buf::value_type)
                                            + sizeof(typename Table::value_type);
     };

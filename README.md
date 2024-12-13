@@ -9,7 +9,7 @@ The MIT License (MIT). Copyright © 2024 Anatoly Petrov <petrov.projects@gmail.c
 # Description
 
 LRU cache is a data structure that combines fast item access by the key with 
-invalidation of least-recently-used items in case of cache limit exhaustion.
+invalidation of least-recently-used items in case of size limit exhaustion.
 
 These traits make the LRU cache useful when you need to effectively memoize 
 some computations (requests, resources, etc.) without risking memory blowup.
@@ -17,7 +17,7 @@ some computations (requests, resources, etc.) without risking memory blowup.
 Our implementation uses `std::unordered_map` as a hashtable (for item lookup) and
 `std::list` as a buffer for cached items. Any time the client requests an item, 
 the requested item is moved to the front of the buffer, which allows us to track 
-item usage and delete the least-recently-used item when the cache has exceeded the limit.
+item usage and delete the least-recently-used item when the limit has exceeded.
 
 Thus, we have the constant time complexity for average reads/writes and linear time complexity 
 for the worst case (key collision for every item, which is possible only in case of attack
@@ -229,10 +229,11 @@ Item count/memory usage may be limited in ctor...
 
 ```cpp
 // Creates a new cache.
-explicit Cache(const size_t maxsize = nval, const size_t maxmem = nval);
+explicit Cache::Cache(const size_t maxsize = nval,  // item count limit
+                      const size_t maxmem = nval, // memory usage limit
+                      KeyMem key_mem = nullptr, // hint for memory allocated by the key
+                      ValueMem value_mem = nullptr) // hint for memory allocated by the value
 
-// Creates a new cache.
-explicit SafeCache(const size_t maxsize = nval, const size_t maxmem = nval);
 ```
 
 ...or dynamically during program execution:
@@ -248,7 +249,8 @@ void Cache::Maxmem(const size_t bytes)
 ```
 
 If `maxsize` and `maxmem` are not specified (default), the cache turns to the unbounded cache.
-However, the performance of such an unbounded cache will not be ideal because LRU tracking still performs.
+However, the performance of such an unbounded cache will not be ideal because LRU tracking 
+is still produced anyway.
 
 You may receive item count and memory usage with `Stats` method (see below) or 
 with `Maxsize`/`Maxmem` (limits) and `Size`/`Memory` (actual) methods.
@@ -257,6 +259,11 @@ It should be mentioned that `lru_cache` returns only *approximate memory usage*.
 The actual memory usage for non-POD/complex types may differ significantly.
 For example, if the desired type contains a pointer to a dynamic buffer, we will consider 
 only the pointer size, not the buffer itself.
+
+To handle such cases, the client may provide to the cache ctor `key_mem` and `value_mem` 
+hint functions that return the actual size of the dynamic buffer allocated by `Key` and `Value`.
+The result should not include the size of the `Key`/`Value` type itself
+because it is already calculated by the cache with the `sizeof()` function.
 
 Also, memory usage value doesn't include the size of internal cache structures
 or the size of allocated, but not filled memory (it is, the `currmem` value shows only 

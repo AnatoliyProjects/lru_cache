@@ -45,6 +45,8 @@ namespace lru {
         // Cache traits.
         using Traits = CacheTraits<Key, Value, Hash, KeyEqual, Allocator>;
         using Item = typename Traits::Item;
+        using KeyMem = typename Traits::KeyMem;
+        using ValueMem = typename Traits::ValueMem;
         using Buf = typename Traits::Buf;
         using Iter = typename Traits::Iter;
         using ConstIter = typename Traits::ConstIter;
@@ -70,12 +72,18 @@ namespace lru {
         }
 
         // Creates a new cache.
-        // If maxsize and maxmem are not specified, the cache turns to the unbounded cache.
+        // 1) If maxsize and maxmem are not specified, the cache turns to the unbounded cache.
         // However, the performance of such an unbounded cache will not be ideal because of LRU.
+        // 2) For accurate memory monitoring, the client may provide key_mem and value_mem hint functions
+        // that return the actual size of the dynamic buffer allocated by Key and Value.
+        // The return value should not include the size of the Key/Value type itself
+        // because it is already calculated by the cache with the sizeof() function.
         explicit Cache(const size_t maxsize = nval,
-                       const size_t maxmem = nval): stats_{
-            0, 0, maxsize, 0, maxmem, 0
-        } {
+                       const size_t maxmem = nval,
+                       KeyMem key_mem = nullptr,
+                       ValueMem value_mem = nullptr): stats_{
+                0, 0, maxsize, 0, maxmem, 0
+            }, key_mem_(std::move(key_mem)), value_mem_(std::move(value_mem)) {
         }
 
         // Returns an iterator to the beginning of the cache buffer.
@@ -112,8 +120,7 @@ namespace lru {
                 Push(key, std::forward<V>(value));
             } else {
                 // exists
-                it->second->second = std::forward<V>(value);
-                Touch(it->second);
+                Update(it->second, std::forward<V>(value));
             }
         }
 
@@ -142,8 +149,7 @@ namespace lru {
             // missed
             if (it == table_.end()) { return false; }
             // exists
-            it->second->second = std::forward<V>(value);
-            Touch(it->second);
+            Update(it->second, std::forward<V>(value));
             return true;
         }
 
@@ -167,10 +173,11 @@ namespace lru {
             auto it = table_.find(key);
             if (it == table_.end()) { return false; }
             // exists
+            const size_t mem = CalcItemMem(*it->second);
             buf_.erase(it->second);
             table_.erase(it);
             stats_.currsize--;
-            stats_.currmem -= kItemMem;
+            stats_.currmem -= mem;
             return true;
         }
 
@@ -183,10 +190,10 @@ namespace lru {
         }
 
         // Returns current item count.
-        [[nodiscard]] size_t Size() const { return table_.size(); }
+        [[nodiscard]] size_t Size() const { return stats_.currsize; }
 
         // Returns current memory usage.
-        [[nodiscard]] size_t Memory() const { return table_.size() * kItemMem; }
+        [[nodiscard]] size_t Memory() const { return stats_.currmem; }
 
         // Returns upper limit of item count.
         [[nodiscard]] size_t Maxsize() const { return stats_.maxsize; }
@@ -197,31 +204,37 @@ namespace lru {
         // Limits maximum item count.
         // It also shrinks the cache to the new limit (if needed).
         void Maxsize(size_t items) {
+            if (items == nval) {
+                stats_.maxsize = items;
+                return;
+            }
+            // not nval
             auto start = std::next(buf_.cbegin(),
                                    std::min(items, buf_.size()));
             auto stop = buf_.cend();
+            size_t mem = 0;
             std::for_each(start, stop,
-                          [this](const auto &item) { table_.erase(item.first); }
+                          [this, &mem](const auto &item) {
+                              mem += CalcItemMem(item);
+                              table_.erase(item.first);
+                          }
             );
             buf_.erase(start, stop);
             stats_.maxsize = items;
-            stats_.currsize = Size();
+            if (stats_.currsize > items) { stats_.currsize = items; }
             // stats_.maxmem unchanged
-            stats_.currmem = Memory();
+            stats_.currmem -= mem;
         }
 
         // Limits maximum memory usage.
         // It also shrinks the cache to the new limit (if needed).
         void Maxmem(const size_t bytes) {
-            size_t currmem = Memory();
-            while (currmem > bytes) {
-                Pop();
-                currmem = Memory();
-            }
+            // No need to check for bytes == nval
+            while (stats_.currmem > bytes) { Pop(); }
             // stats_.maxsize unchanged
-            stats_.currsize = Size();
+            // stats_.currsize already changed in Pop()
             stats_.maxmem = bytes;
-            stats_.currmem = Memory();
+            // stats_.currmem already changed in Pop()
         }
 
         // Returns cache statistics.
@@ -293,6 +306,8 @@ namespace lru {
         Buf buf_;
         Table table_;
         mutable CacheInfo stats_;
+        KeyMem key_mem_;
+        ValueMem value_mem_;
 
         void Touch(Iter it) { buf_.splice(buf_.cbegin(), buf_, it); }
 
@@ -300,17 +315,41 @@ namespace lru {
         void Push(const Key &key, V &&value) {
             buf_.emplace_front(key, std::forward<V>(value));
             table_.emplace(key, buf_.begin());
-            if (Size() > stats_.maxsize or Memory() > stats_.maxmem) { Pop(); }
-            stats_.currsize = Size();
-            stats_.currmem = Memory();
+            stats_.currsize += 1;
+            stats_.currmem += CalcItemMem(buf_.front());
+            if (stats_.currsize > stats_.maxsize
+                or stats_.currmem > stats_.maxmem) { Pop(); }
         }
 
         void Pop() {
             if (buf_.empty()) return;
             // not empty
+            const size_t mem = CalcItemMem(buf_.back());
             const Key &last = buf_.back().first;
             table_.erase(last);
             buf_.pop_back();
+            stats_.currsize -= 1;
+            stats_.currmem -= mem;
+        }
+
+        template<typename V>
+        void Update(Iter it, V &&value) {
+            const size_t mem = value_mem_
+                                   ? stats_.currmem
+                                     - value_mem_(it->second)
+                                     + value_mem_(value)
+                                   : stats_.currmem;
+            it->second = std::forward<V>(value);
+            stats_.currmem = mem;
+            Touch(it);
+        }
+
+        size_t CalcItemMem(const Item &item) {
+            size_t size = kItemMem;
+            // We store two copies of Key (one in Table, one in Buf).
+            if (key_mem_) { size += key_mem_(item.first) * 2; }
+            if (value_mem_) { size += value_mem_(item.second); }
+            return size;
         }
     };
 

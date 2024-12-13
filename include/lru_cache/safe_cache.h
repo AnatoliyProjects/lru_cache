@@ -50,6 +50,8 @@ namespace lru {
         using Base = Cache<Key, Value, Hash, KeyEqual, Allocator>;
         using Traits = typename Base::Traits;
         using Item = typename Traits::Item;
+        using KeyMem = typename Traits::KeyMem;
+        using ValueMem = typename Traits::ValueMem;
         using Buf = typename Traits::Buf;
         using Iter = typename Traits::Iter;
         using ConstIter = typename Traits::ConstIter;
@@ -63,27 +65,35 @@ namespace lru {
 
         // Writes a string representation of the cache to the stream.
         template<typename K, typename V>
-        friend std::ostream &operator<<(std::ostream &, const SafeCache<K, V> &);
+        friend std::ostream &operator
+        <<(std::ostream &, const SafeCache<K, V> &);
 
         // Returns true if cache items and their LRU order are equal.
         // Non-optimized implementation. Use only for debugging/testing.
-        ScopeGuard<bool> operator ==(const SafeCache& other) const {
+        ScopeGuard<bool> operator ==(const SafeCache &other) const {
             Lock lock(mutex_);
             return {std::move(lock), Base::operator==(other)};
         }
 
         // Returns true if cache items or their LRU order are not equal.
         // Non-optimized implementation. Use only for debugging/testing.
-        ScopeGuard<bool> operator !=(const SafeCache& other) const {
+        ScopeGuard<bool> operator !=(const SafeCache &other) const {
             Lock lock(mutex_);
             return {std::move(lock), Base::operator!=(other)};
         }
 
         // Creates a new cache.
-        // If maxsize and maxmem are not specified, the cache turns to the unbounded cache.
+        // 1) If maxsize and maxmem are not specified, the cache turns to the unbounded cache.
         // However, the performance of such an unbounded cache will not be ideal because of LRU.
+        // 2) For accurate memory monitoring, the client may provide key_mem and value_mem hint functions
+        // that return the actual size of the dynamic buffer allocated by Key and Value.
+        // The return value should not include the size of the Key/Value type itself
+        // because it is already calculated by the cache with the sizeof() function.
         explicit SafeCache(const size_t maxsize = nval,
-                           const size_t maxmem = nval): Base(maxsize, maxmem) {
+                           const size_t maxmem = nval,
+                           KeyMem key_mem = nullptr,
+                           ValueMem value_mem = nullptr): Base(
+            maxsize, maxmem, std::move(key_mem), std::move(value_mem)) {
         }
 
         // Returns an iterator to the beginning of the cache buffer.
@@ -157,12 +167,15 @@ namespace lru {
         template<typename V>
         ScopeGuard<bool> Replace(const Key &key, V &&value) {
             Lock lock(mutex_);
-            return {std::move(lock), Base::Replace(key, std::forward<V>(value))};
+            return {
+                std::move(lock), Base::Replace(key, std::forward<V>(value))
+            };
         }
 
         // Retrieves data by the key.
         // Returns empty optional if an item was not found.
-        ScopeGuard<std::optional<std::reference_wrapper<Value> > > Get(const Key &key) {
+        ScopeGuard<std::optional<std::reference_wrapper<Value> > > Get(
+            const Key &key) {
             Lock lock(mutex_);
             return {std::move(lock), Base::Get(key)};
         }
@@ -257,23 +270,26 @@ namespace lru {
             Guard guard(mutex_);
             Base::Load(c);
         }
+
     private:
         mutable Mutex mutex_;
     };
 
     template<typename Key, typename Value>
-    std::ostream &operator<<(std::ostream &out, const SafeCache<Key, Value> &cache) {
+    std::ostream &operator<<(std::ostream &out,
+                             const SafeCache<Key, Value> &cache) {
         // <syncstream> from C++20 standard is not widely supported by the compilers.
         // So as a workaround we implement stream synchronization ourselves.
         static std::mutex m;
         std::scoped_lock guard{m, cache.mutex_};
         const std::string name = std::format("lru::SafeCache<Key={}, Value={}>",
-                                             typeid(Key).name(), typeid(Value).name());
+                                             typeid(Key).name(),
+                                             typeid(Value).name());
         out << name << " at " << &cache << '\n';
         out << cache.Stats() << '\n';
         size_t n = 0;
         // We don't need SafeCache here, because the cache mutex is already locked.
-        for (const auto &item: static_cast<const Cache<Key, Value>& >(cache)) {
+        for (const auto &item: static_cast<const Cache<Key, Value> &>(cache)) {
             out << aux::ItemToStr(item, n) << '\n';
             n++;
         }

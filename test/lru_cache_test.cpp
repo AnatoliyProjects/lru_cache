@@ -337,6 +337,45 @@ TYPED_TEST(CrudTestSuite, TestStreamOutputFormatting) {
 }
 
 // ============================================================================
+// Allocated memory monitoring test suite
+// ============================================================================
+
+TEST(CrudTestSuiteExt, TestAllocMemoryMonitoring) {
+    using Cache = lru::Cache<std::string, std::string>;
+    // For accurate results, we need to use std::string::capacity() method.
+    // But we use std::string::size() for testing because it is more predictable.
+    auto op = [](const std::string& str) { return str.size(); };
+    Cache cache(lru::nval, lru::nval, op, op);
+    size_t mem = 0;
+    EXPECT_EQ(cache.Memory(), mem);
+    const std::string key1 {"1"}, value1{"12"}, key2{"123"}, value2{"1234"};
+    mem += cache.kItemMem + key1.size() * 2 + value1.size();
+    cache.Set(key1, value1); // {key1, value1}
+    EXPECT_EQ(cache.Memory(), mem);
+    mem += cache.kItemMem + key2.size() * 2 + value2.size();
+    cache.Add(key2, value2); // {key1, value1}, {key2, value2}
+    EXPECT_EQ(cache.Memory(), mem);
+    mem = mem - value2.size() + value1.size();
+    cache.Replace(key2, value1); // {key1, value1}, {key2, value1}
+    EXPECT_EQ(cache.Memory(), mem);
+    mem -= cache.kItemMem + key1.size() * 2 + value1.size();
+    cache.Delete(key1); // {key2, value1}
+    EXPECT_EQ(cache.Memory(), mem);
+    mem = cache.kItemMem + key1.size() * 2 + value2.size();
+    cache.Maxsize(1);
+    cache.Set(key1, value2); // {key1, value2} because maxsize == 1
+    EXPECT_EQ(cache.Memory(), mem);
+    EXPECT_EQ(cache.Size(), cache.Maxsize());
+    mem = 0;
+    cache.Maxmem(cache.kItemMem + key1.size() * 2 + value1.size()); // {}
+    EXPECT_EQ(cache.Memory(), mem);
+    mem += cache.kItemMem + key1.size() * 2 + value1.size();
+    cache.Set(key1, value1); // {key1, value1}
+    EXPECT_EQ(cache.Memory(), mem);
+    EXPECT_EQ(cache.Memory(), cache.Maxmem());
+}
+
+// ============================================================================
 // Serde loader test suite
 // ============================================================================
 
