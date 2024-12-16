@@ -558,6 +558,60 @@ TYPED_TEST(SerdeIntegralSequenceTestSuite, TestSerdeIntegralSequence) {
 }
 
 // ============================================================================
+// Serde integral sequence test suite (additional tests)
+// ============================================================================
+
+TEST(SerdeIntegralSequenceTestSuiteEx, TestSerdeFullCharRange) {
+    using Cache = lru::Cache<std::string, std::string>;
+    Cache sample, result;
+    for (char ch = std::numeric_limits<char>::min(); ch <= std::numeric_limits<char>::max(); ++ch) {
+        for (auto [key_n, value_n]: std::vector<std::pair<int, int>>{{2048, 512}, {1024, 1024}, {512, 2048}}) {
+            std::string key(key_n, ch);
+            std::string value(value_n, ch);
+            sample.Set(key, value);
+            result.Set(key, value);
+        }
+        if (ch == std::numeric_limits<char>::max()) { break; }
+    }
+    std::stringstream ss;
+    sample.Dump(std::ostreambuf_iterator(ss));
+    sample.Flush();
+    ss.seekp(0);
+    sample.Load(std::istreambuf_iterator(ss), std::istreambuf_iterator<char>());
+    EXPECT_EQ(sample, result);
+}
+
+TEST(SerdeIntegralSequenceTestSuiteEx, TestSerdeLongSequence) {
+    using Cache = lru::Cache<std::string, std::string>;
+    Cache sample, result;
+    std::string seq(40000, 'a');
+    sample.Set(seq, seq);
+    result.Set(seq, seq);
+    std::stringstream ss;
+    sample.Dump(std::ostreambuf_iterator(ss));
+    sample.Flush();
+    ss.seekp(0);
+    sample.Load(std::istreambuf_iterator(ss), std::istreambuf_iterator<char>());
+    EXPECT_EQ(sample, result);
+}
+
+TEST(SerdeIntegralSequenceTestSuiteEx, TestSerdeDiffItemSize) {
+    using Cache = lru::Cache<std::string, std::string>;
+    for (int n = 0; n < 256; ++n) {
+        Cache sample, result;
+        std::string seq(n, 'a');
+        sample.Set(seq, seq);
+        result.Set(seq, seq);
+        std::stringstream ss;
+        sample.Dump(std::ostreambuf_iterator(ss));
+        sample.Flush();
+        ss.seekp(0);
+        sample.Load(std::istreambuf_iterator(ss), std::istreambuf_iterator<char>());
+        EXPECT_EQ(sample, result);
+    }
+}
+
+// ============================================================================
 // Synchronization test suite
 // ============================================================================
 

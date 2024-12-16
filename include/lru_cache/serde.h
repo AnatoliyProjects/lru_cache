@@ -83,24 +83,16 @@ namespace lru::serde {
     // Specialization for integral types.
     template<integral T>
     struct Serde<T> {
-        static Bytes Serialize(T val) {
-            Bytes buf;
-            auto curr = reinterpret_cast<Byte *>(&val);
-            for (int i = 0; i < sizeof(T); ++i) {
-                buf.push_back(*curr);
-                ++curr;
-            }
-            return buf;
+        static Bytes Serialize(T src) {
+            Bytes dst(sizeof(T));
+            std::memcpy(dst.data(), &src, sizeof(T));
+            return dst;
         }
 
-        static T Deserialize(const View chunk) {
-            T val = 0;
-            auto it = std::to_address(chunk.begin());
-            for (int i = 0; i < sizeof(T); ++i) {
-                val |= static_cast<T>(*it) << i * 8;
-                ++it;
-            }
-            return val;
+        static T Deserialize(const View src) {
+            T dst;
+            std::memcpy(&dst, src.data(), sizeof(T));
+            return dst;
         }
     };
 
@@ -140,35 +132,6 @@ namespace lru::serde::aux {
     // ========================================================================
     // Implementation details
     // ========================================================================
-
-    // ------------------------------------------------------------------------
-    // Helpers
-    // ------------------------------------------------------------------------
-
-    // Encodes size variable as row bytes with system-specific byte order.
-    // On most platforms, it will be a little-endian.
-    // The byte order at the encoding and decoding stages must be the same.
-    inline Bytes EncodeSize(Size size) {
-        const Byte *byte = reinterpret_cast<Byte *>(&size);
-        Bytes res;
-        for (int i = 0; i < sizeof(Size); ++i) { res.push_back(byte[i]); }
-        return res;
-    }
-
-    // Decodes row bytes as size variable, keeping the input byte order.
-    // The byte order at the encoding and decoding stages must be the same.
-    // Here, we accept a reference to the iterator, so further advancing is unnecessary.
-    // This approach makes the function suitable for single-pass iterators, which is crucial
-    // to stream support.
-    template<input_byte_iterator It>
-    Size DecodeSize(It &it) {
-        Size size = 0;
-        for (int i = 0; i < sizeof(Size); ++i) {
-            size |= static_cast<Size>(*it) << i * 8;
-            ++it;
-        }
-        return size;
-    }
 
     // ------------------------------------------------------------------------
     // Serializing iterator
@@ -227,7 +190,7 @@ namespace lru::serde::aux {
         template<typename S, typename T>
         static void SerializeChunk(S &serde, const T &obj, Bytes &buf) {
             const Bytes chunk = serde.Serialize(obj);
-            WriteChunk(EncodeSize(chunk.size()), buf);
+            WriteChunk(Serde<Size>::Serialize(chunk.size()), buf);
             WriteChunk(chunk, buf);
         }
 
@@ -289,7 +252,8 @@ namespace lru::serde::aux {
 
         template<typename S>
         auto DeserializeChunk(S &serde) {
-            const Size size = DecodeSize(curr_);
+            const Bytes src = ReadChunk(sizeof(Size));
+            const Size size = Serde<Size>::Deserialize({src.data(), src.size()});
             if constexpr (std::contiguous_iterator<Iter>) {
                 // Underlying byte data is contiguous.
                 // We are dealing with ContiguousContainer (string, vector, etc.).
