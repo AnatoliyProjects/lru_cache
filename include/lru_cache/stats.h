@@ -21,12 +21,12 @@ namespace lru {
     // Helper structure representing cache statistics.
     // Mimics Python lru_cache statistics.
     struct CacheInfo {
-        size_t hits; // Cache::Get() hits
-        size_t misses; // Cache::Get() misses
-        size_t maxsize; // Item count upper limit
-        size_t currsize; // Current item count
-        size_t maxmem; // Memory usage upper limit
-        size_t currmem; // Current memory usage
+        size_t hits{0}; // Cache::Get() hits
+        size_t misses{0}; // Cache::Get() misses
+        size_t maxsize{nval}; // Item count upper limit
+        size_t currsize{0}; // Current item count
+        size_t maxmem{nval}; // Memory usage upper limit
+        size_t currmem{0}; // Current memory usage
 
         // Converts statistics to the string.
         [[nodiscard]] std::string to_string() const {
